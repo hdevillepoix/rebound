@@ -1,10 +1,10 @@
-OPT+= -std=c99 -Wpointer-arith -D_GNU_SOURCE -O3 
+OPT+= -h stdc -D_GNU_SOURCE -O3 -hfp3
 # Removed -march=native for now
 ifndef OS
 	OS=$(shell uname)
 endif
 ifeq ($(OS), Linux)
-	OPT+= -Wall -g
+	OPT+= -h msglevel_3 -g
 	LIB+= -lm -lrt
 endif
 ifeq ($(OS), Darwin)
@@ -44,13 +44,8 @@ endif
 
 ifeq ($(OPENMP), 1)
 	PREDEF+= -DOPENMP
-ifeq ($(CC), icc)
-	OPT+= -openmp
-	LIB+= -openmp
-else
-	OPT+= -fopenmp
-	LIB+= -fopenmp
-endif
+	OPT+= -h omp
+	LIB+= -h omp
 else
 	OPT+= -Wno-unknown-pragmas
 endif

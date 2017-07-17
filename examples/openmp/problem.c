@@ -22,6 +22,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <omp.h>
+//#include <string.h>
 #include "rebound.h"
 #include "tools.h"
 #include "output.h"
@@ -42,7 +43,7 @@ void run_sim(){
 
 	// Setup particles
 	double disc_mass = 2e-1;	// Total disc mass
-	int N = 2000;			// Number of particles
+	int N = 20000;			// Number of particles
 	// Initial conditions
 	struct reb_particle star = {0};
 	star.m 		= 1;
@@ -63,16 +64,18 @@ void run_sim(){
 		reb_add(r, pt);
 	}
 
-	reb_integrate(r, 1.0);
+	reb_integrate(r, 20.0);
 	reb_free_simulation(r);
 }
 
 int main(int argc, char* argv[]){
 	// Get the number of processors
-	int np = omp_get_num_procs();
+	// int np = omp_get_num_procs();
+	int np = atoi(argv[1]);
 	// Set the number of OpenMP threads to be the number of processors	
 	omp_set_num_threads(np);
 
+	printf("\n omp_get_num_procs() = %d \n", np);
 	
 	// First, run it with the OpenMP turned on.
 	struct timeval tim;
