@@ -28,6 +28,25 @@
 #include "output.h"
 
 
+
+void print_sim_status(struct reb_simulation* const r, float simulation_time){
+    printf("----SIMULATION STATUS----")
+
+	printf("Integration time:               %.8f years\n", simulation_time);
+    //printf("Integration time:               %.8f machine time\n", simulation_time*2.0*M_PI);
+	printf("Nominal timestep:               %.8f\n", r->dt);
+	printf("Number of particles:            %d\n", r->N);
+    printf("Number of massive particles:    %d\n", r->N_active);
+    printf("Number of test particles:       %d\n", r->N - r->N_active);
+    printf("Number of hashed particles:     %d\n", r->hash_ctr);
+    printf("Gravity constant:               %.8f\n", r->G);
+	//printf("Output data every:              %.8f years\n", r->simulationarchive_interval/2.0/M_PI);
+    printf("Output data every:              %.8f years\n", r->simulationarchive_interval);
+	printf("Saving to file:                 %s\n",r->simulationarchive_filename);
+    
+}
+
+
 void run_sim_from_archive(char *filename, float simulation_time){
 	//char filename[512] = "archive.bin";
 
@@ -54,16 +73,14 @@ void run_sim_from_archive(char *filename, float simulation_time){
 	reb_configure_box(r,boxsize,1,1,1);
 	*/
 	
+    print_sim_status(r, simulation_time);
 
-	printf("Integration time: %.8f years\n",simulation_time);
-	printf("Nominal timestep: %.8f\n",r->dt);
-	printf("Number of particles: %d\n",r->N);
-        printf("Number of massive particles: %d\n",r->N_active);
-	printf("Output data every %.8f years\n",r->simulationarchive_interval/2.0/M_PI);
-        printf("Integration time: %.8f (machine time)\n",simulation_time*2.0*M_PI);
-	printf("Saving to file: %s\n",r->simulationarchive_filename);
 
-	reb_integrate(r, simulation_time*2.0*M_PI);
+	//reb_integrate(r, simulation_time*2.0*M_PI);
+    reb_integrate(r, simulation_time);
+    
+    print_sim_status(r, simulation_time);
+    
 	reb_free_simulation(r);
 }
 
@@ -71,15 +88,18 @@ int main(int argc, char* argv[]){
 	// Get the number of processors
 	// int np = omp_get_num_procs();
 
-	if (argc < 3){
-		printf("\n Usage: ./rebound.x OMP_NUM_PROCS ARCHIVEFILE.bin SIMULATION_TIME\n");
+	if (argc < 2){
+		printf("\n Usage: ./rebound.x ARCHIVEFILE.bin SIMULATION_TIME_EARTH_YEARS\n");
 	}
 
-	int np = atoi(argv[1]);
+	//int np = atoi(argv[1]);
+	np_string = getenv("OMP_NUM_THREADS");
+    int np =  = atoi(np_string);
+    
 	// Set the number of OpenMP threads to be the number of processors	
 	omp_set_num_threads(np);
 
-	printf("\n omp_get_num_procs() = %d \n", np);
+	printf("\nomp_get_num_procs() got %d from env var OMP_NUM_THREADS\n", np);
 	
 	run_sim_from_archive(argv[2], atof(argv[3]));
 

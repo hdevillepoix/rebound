@@ -6,7 +6,7 @@ CPPFLAGS = -DLIBREBOUND -DOPENMP -D_GNU_SOURCE
 all: librebound
 	@echo ""
 	@echo "Compiling problem file ..."
-	$(CC) $(CFLAGS) -I../../src/ $(CPPFLAGS) -L/group/pawsey0152/hdevillepoix/rebound/src problem.c -lrebound -lm -lrt -o rebound.x
+	$(CC) $(CFLAGS) -I../../src/ $(CPPFLAGS) -L/group/pawsey0152/hdevillepoix/rebound/src rebound_omp_cluster.c -lrebound -lm -lrt -o rebound.x
 	@echo ""
 	@echo "REBOUND compiled successfully."
 
