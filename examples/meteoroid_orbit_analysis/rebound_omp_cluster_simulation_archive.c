@@ -56,11 +56,7 @@ const float SOI_saturn = 54.6e6;
 const float SOI_uranus = 51.8e6;            
 const float SOI_neptune = 86.8e6;    
 
-/*
-static const char COLLISION_FILE[]   = "_collisions_record.csv";
-static const char ORBIT_CONV_FILE[]  = "_orbits.csv";
-static const char ORBIT_ALL_FILE[]   = "_orbits.csv";
-*/
+
 
 
 void print_sim_status(struct reb_simulation* const r, float simulation_time){
@@ -109,62 +105,6 @@ char *rem_ext(char* mystr) {
 }
 
 
-/**
-General function to generate output filename using input file basename
-*/
-int generate_output_filename(char *filename, struct reb_simulation* const r, const char *output_type){
-	strcat(filename, rem_ext(r->simulationarchive_filename));
-	
-	// cast to int the sim time and use that for the name
-	int int_curr_sim_time = (int) r->t;
-	char str_curr_sim_time[12];
-	sprintf(str_curr_sim_time, "%d", int_curr_sim_time);
-	
-	if (strcmp(output_type, "COLLISION") == 0){
-		strcat(filename, "_collisions_record.csv");
-	}
-	else if (strcmp(output_type, "ORBIT_CONVERGENCE") == 0){
-		strcat(filename, "_converging_orbits.csv");
-	}
-	else if (strcmp(output_type, "ORBIT_ALL") == 0){
-		//strcat(filename, "_");		
-		//strcat(filename, str_curr_sim_time);
-		strcat(filename, "_all_orbits.csv");
-	}
-	else if (strcmp(output_type, "BINARY") == 0){
-		strcat(filename, "_");		
-		strcat(filename, str_curr_sim_time);
-		strcat(filename, ".bin");
-	}
-	return 0;
-}
-
-/**
-General function to generate CSV header for output file.
-Overwrites existing files
-*/
-void initialise_output_file(struct reb_simulation* const r, const char *output_type){
-	char filename[255] = "";
-	generate_output_filename(filename, r, output_type);
-	printf("Initialising file: %s\n", filename);
-
-	FILE* of = fopen(filename,"w");
-	if (strcmp(output_type, "COLLISION") == 0){
-		fprintf(of, "time,massive_particle_hash,test_particle_hash,distance\n");
-	}
-	else if ((strcmp(output_type, "ORBIT_CONVERGENCE") == 0) || (strcmp(output_type, "ORBIT_ALL") == 0)){
-		fprintf(of, "time,particle_hash,a,e,i,w,W\n");
-		//time, semi-major axis, eccentricity, inclination, Omega (longitude ascending node), omega (argument of pericenter), lambda (mean longitude), period, f (true anomaly).
-	}
-	fclose(of);
-}
-
-
-
-
-
-/*
-
 int generate_collision_file(char *collision_file, struct reb_simulation* const r){
 	//char collision_file[255] = "";
 	strcat(collision_file, rem_ext(r->simulationarchive_filename));
@@ -190,7 +130,7 @@ void initialise_collision_file(struct reb_simulation* const r){
 	fprintf(of, "time,particle_1,particle_2,distance\n");				       // time
 	fclose(of);
 }
-*/
+
 
 /*
     sim.add("Sun", date=date)
@@ -230,21 +170,23 @@ int increase_radius_for_close_encounter_record(struct reb_simulation* r){
 	return 0;
 }
 
-
 // Define our own collision resolve function, which will only record collisions but not change any of the particles.
-int collision_record_and_destroy(struct reb_simulation* const r, struct reb_collision c){
+int collision_record_only(struct reb_simulation* const r, struct reb_collision c){
 	double delta_t = 1.0; // 1 year
 	struct reb_particle* particles = r->particles;
 	const double t = r->t;
 
-	// only record if it is not a collision between 2 massive particles (eg. Moon in Earth SOI)
-	if (c.p1 >= r->N_active || c.p2 >= r->N_active){
+	// only record a maximum of one collision per year per particle and if it is not a collision between 2 massive particles (eg. Moon in Earth SOI)
+	// Backward integration
+	if ( (c.p1 >= r->N_active || c.p2 >= r->N_active) && particles[c.p1].lastcollision-delta_t > t  &&  particles[c.p2].lastcollision-delta_t > t ){
 
+	// Forward integration
+	// if ( (c.p1 >= r->N_active || c.p2 >= r->N_active) && particles[c.p1].lastcollision+delta_t < t  &&  particles[c.p2].lastcollision+delta_t < t ){
 		particles[c.p1].lastcollision = t;
 		particles[c.p2].lastcollision = t;
 		printf("Collision detected at %f\n", t);
 		char collision_file[255] = "";
-		generate_output_filename(collision_file, r, "COLLISION");
+		generate_collision_file(collision_file, r);
 		//printf("Collision output: %s\n", collision_file);
 		FILE* of = fopen(collision_file,"a+");		   // open file for collision output
 
@@ -252,93 +194,17 @@ int collision_record_and_destroy(struct reb_simulation* const r, struct reb_coll
 		int max_index = MAX(c.p1, c.p2);
 		// have the massive particle as p1 and the test particle as p2 for easing post mortem analysis
 		struct reb_particle diff_p = reb_particle_minus(particles[c.p1],particles[c.p2]);
-		double dist_au = sqrt(diff_p.x*diff_p.x+diff_p.y*diff_p.y+diff_p.z*diff_p.z);
-		fprintf(of, "%e,%u,%u,%e\n", t, particles[min_index].hash, particles[max_index].hash, dist_au);
+		fprintf(of, "%e,%d,%d,%e\n", t, min_index, max_index,sqrt(diff_p.x*diff_p.x+diff_p.y*diff_p.y+diff_p.z*diff_p.z));
 		fclose(of);
-		// remove particle
-		int rmstatus = reb_remove(r, max_index, 1);
-		if (rmstatus == 1){
-			printf("Particle %d has been removed from simulation after collision with massive particle %d\n", max_index, min_index);
-		}
-		else{
-			printf("PROBLEM REMOVING particle %d after collision with massive particle %d", max_index, min_index);
-		}
-		
 	}
 	return 0;
 }
 
-
-void source_region_convergence_check(struct reb_simulation* const r){
-
-	char orb_file[255] = "";
-	generate_output_filename(orb_file, r, "ORBIT_CONVERGENCE");
-	FILE* of = fopen(orb_file,"a+");
-
-	// iterate all test particles
-	for (int i=r->N_active; i < r->N; i++){
-		struct reb_orbit orb = reb_tools_particle_to_orbit(r->G, r->particles[i], r->particles[0]);
-		
-		// escape Mars influence: perihelion > Mars aphelion
-		if (orb.a*(1-orb.e) > 1.67){
-			fprintf(of, "%e,%u,%e,%e,%e,%e,%e\n", r->t, r->particles[i].hash, orb.a, orb.e, orb.inc, orb.omega, orb.Omega);
-		}
-		
-	}	
-	fclose(of);
-}
-
-
-void save_all_orbits(struct reb_simulation* const r){
-
-	char orb_file[255] = "";
-	generate_output_filename(orb_file, r, "ORBIT_ALL");
-	FILE* of = fopen(orb_file,"a+");
-
-	// iterate all test particles and massive particles except Sun
-	for (int i=1; i < r->N; i++){
-		struct reb_orbit orb = reb_tools_particle_to_orbit(r->G, r->particles[i], r->particles[0]);
-		
-		fprintf(of, "%e,%u,%e,%e,%e,%e,%e\n", r->t, r->particles[i].hash, orb.a, orb.e, orb.inc, orb.omega, orb.Omega);		
-	}
-	fclose(of);
-}
-
-
-
-int simulation_health_check(struct reb_simulation* const r){
-	// check that there are still test particles in the simulation
-	// exit if not
-	
-	if (r->N_active == r->N){
-		printf("Simulation has ran out of test particles.\nExiting at t = %.8f years ...\n", r->t);
-		exit(2);
-	}
-	return 0;
-	
-	
-	
-}
 
 void heartbeat(struct reb_simulation* r){
 	if (reb_output_check(r, 10.)){
 		reb_output_timing(r, 100);
-		
-		// check if some particles have attained convergence to MB
-		source_region_convergence_check(r);
-		
-		// record orbits of all surviving particles
-		save_all_orbits(r);
-		
-		char binary_file[255] = "";
-		generate_output_filename(binary_file, r, "BINARY");
-		reb_output_binary(r, binary_file);
-		
-		// kill simulation if all test particles have died
-		simulation_health_check(r);
 		//reb_output_orbits(r, "orbits.csv");
-		// save a snapshot of the simulation in case it gets interrupted
-		//reb_output_binary(struct reb_simulation *r, char *filename)
 	}
 }
 
@@ -354,47 +220,38 @@ void run_sim_from_archive(char *filename, float simulation_time){
 	}
 
 	printf("Found simulation archive. Loaded snapshot.\n");
-	
-	// keep as basename
 	r->simulationarchive_filename = filename;
 
-	initialise_output_file(r, "COLLISION");
-	initialise_output_file(r, "ORBIT_CONVERGENCE");
-	initialise_output_file(r, "ORBIT_ALL");
-	
 
+	initialise_collision_file(r);
 
 	//r->collision            = REB_COLLISION_TREE;
 	//r->integrator           = REB_INTEGRATOR_IAS15;
 	//r->integrator           = REB_INTEGRATOR_WHFAST;
-	
-	
-	// assignes uint hashes to all particles
-	for (int i=0; i < r->N; i++){
-		r->particles[i].hash = i;
+	r->collision            = REB_COLLISION_DIRECT;
+	r->collision_resolve    = collision_record_only;
+	increase_radius_for_close_encounter_record(r);
+	for (int i=0; i < r->N_active; i++){
+		printf("Particle %d has a virtual radius of %.8f km\n", i, r->particles[i].r*AU_KM);
 	}
-	
 	//printf("Integrator: %s\n",r->integrator);
 	//r->integrator.min_dt = 1./24./365.25; //1 hour
 	r->heartbeat            = heartbeat;
 	r->simulationarchive_interval = -1.0;
-	r->simulationarchive_interval = 10e10;
-
+/*
+	struct reb_particle* particles = r->particles;
+	for (int i=1; i < r->N; i++){
+		particles[i].lastcollision = -9.99;
+	}
+*/
 
 
 	print_sim_status(r, simulation_time);
 	
 
-	
 
-	//const double original_dt = r->dt;
-	const double original_dt = -0.01; // TODO FIXME
-	
-	
-	
-	
-	printf("Switching to IAS15 integrator for Earth approach resolution.\n");
-	r->integrator           = REB_INTEGRATOR_IAS15;
+
+	const double original_dt = r->dt;
 
 	// set up low step integration to get out of Earth's SOI
 	const double SOI_earth_AU = SOI_earth/AU_KM; // AU
@@ -404,7 +261,9 @@ void run_sim_from_archive(char *filename, float simulation_time){
 	double pry  = r->particles[meteoroid].y - r->particles[earth].y;
 	double prz  = r->particles[meteoroid].z - r->particles[earth].z;
 	double dist_earth_particle = sqrt(prx*prx + pry*pry + prz*prz);
-	
+	printf("Decreasing timestep to get out of the Earth SOI.\n");
+
+	//double
 	while (dist_earth_particle < 3 * SOI_earth_AU){
 		r->dt = original_dt / 20.0 * exp(dist_earth_particle/SOI_earth_AU);
 		printf("Current dt: %.8f hours - %.8f Earth radii from Earth\n", r->dt*365.25*24.0, dist_earth_particle*1.496e8/6371.0);
@@ -415,37 +274,15 @@ void run_sim_from_archive(char *filename, float simulation_time){
 		double prz  = r->particles[meteoroid].z - r->particles[earth].z;
 		dist_earth_particle = sqrt(prx*prx + pry*pry + prz*prz);
 	}
-	
-	// save to binary after the resolution of the Earth encounter
-	char binary_file[255] = "";
-	generate_output_filename(binary_file, r, "BINARY");
-	reb_output_binary(r, binary_file);
-	
-	// save all orbits after the resolution of the Earth encounter
-		
-		
-	
+
 	printf("Preliminary final encounter resolved.\n");
 	print_sim_status(r, simulation_time);
+
+	printf("Switching to main integration\n");
 	
-	
-	printf("Switching to WHFAST integrator for main integration.\n");
-	r->integrator           = REB_INTEGRATOR_WHFAST;
+
+
 	r->dt = original_dt;
-	
-	printf("Setting hill sphere collisions.\n");
-	//r->collision            = REB_COLLISION_DIRECT;
-	r->collision            = REB_COLLISION_TREE;
-	r->collision_resolve    = collision_record_and_destroy;
-	increase_radius_for_close_encounter_record(r);
-	
-	// check virtual radii of massive particles
-	for (int i=0; i < r->N_active; i++){
-		printf("Particle %d has a virtual radius of %.8f km\n", i, r->particles[i].r*AU_KM);
-	}
-	
-
-
 
 
 
