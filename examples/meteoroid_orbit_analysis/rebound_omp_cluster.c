@@ -123,6 +123,9 @@ int generate_output_filename(char *filename, struct reb_simulation* const r, con
 	if (strcmp(output_type, "COLLISION") == 0){
 		strcat(filename, "_collisions_record.csv");
 	}
+	else if (strcmp(output_type, "OOB") == 0){
+		strcat(filename, "_out_of_bounds_orbits.csv");
+	}
 	else if (strcmp(output_type, "ORBIT_CONVERGENCE") == 0){
 		strcat(filename, "_converging_orbits.csv");
 	}
@@ -152,7 +155,7 @@ void initialise_output_file(struct reb_simulation* const r, const char *output_t
 	if (strcmp(output_type, "COLLISION") == 0){
 		fprintf(of, "time,massive_particle_hash,test_particle_hash,distance\n");
 	}
-	else if ((strcmp(output_type, "ORBIT_CONVERGENCE") == 0) || (strcmp(output_type, "ORBIT_ALL") == 0)){
+	else if ((strcmp(output_type, "ORBIT_CONVERGENCE") == 0) || (strcmp(output_type, "ORBIT_ALL") == 0) || (strcmp(output_type, "OOB") == 0)){
 		fprintf(of, "time,particle_hash,a,e,i,w,W\n");
 		//time, semi-major axis, eccentricity, inclination, Omega (longitude ascending node), omega (argument of pericenter), lambda (mean longitude), period, f (true anomaly).
 	}
@@ -269,6 +272,56 @@ int collision_record_and_destroy(struct reb_simulation* const r, struct reb_coll
 }
 
 
+
+/**
+Remove particle that are sent on irrealistic orbits
+*/
+void out_of_bounds_check(struct reb_simulation* const r, struct reb_orbit* orbits){
+
+	char orb_file[255] = "";
+	generate_output_filename(orb_file, r, "OOB");
+	FILE* of = fopen(orb_file,"a+");
+
+	// iterate all test particles
+	// from the end to avoid index problems
+	for (int i=r->N-1; i >= r->N_active; i--){
+		struct reb_orbit orb = orbits[i];
+		if ((orb.e >  0.95) || (orb.a > 6.0) || (orb.a < 0.0)){	
+			int hash = r->particles[i].hash;
+			fprintf(of, "%e,%u,%e,%e,%e,%e,%e\n", r->t, hash, orb.a, orb.e, orb.inc, orb.omega, orb.Omega);	
+			int rmstatus = reb_remove(r, i, 0);
+			if (rmstatus == 1){
+				printf("Particle %u has been removed (OOB).\n", hash);
+			}
+			else{
+				printf("PROBLEM REMOVING particle %d\n", i);
+			}
+		}
+	}	
+	fclose(of);
+}
+
+void source_region_convergence_check(struct reb_simulation* const r, struct reb_orbit* orbits){
+
+	char orb_file[255] = "";
+	generate_output_filename(orb_file, r, "ORBIT_CONVERGENCE");
+	FILE* of = fopen(orb_file,"a+");
+
+	// iterate all test particles
+	for (int i=r->N_active; i < r->N; i++){
+		struct reb_orbit orb = orbits[i];
+		
+		// escape Mars influence: perihelion > Mars aphelion
+		if (orb.a*(1-orb.e) > 1.67){
+			fprintf(of, "%e,%u,%e,%e,%e,%e,%e\n", r->t, r->particles[i].hash, orb.a, orb.e, orb.inc, orb.omega, orb.Omega);
+		}
+	}	
+	fclose(of);
+}
+
+
+/**w3
+DEPRECATED
 void source_region_convergence_check(struct reb_simulation* const r){
 
 	char orb_file[255] = "";
@@ -283,12 +336,14 @@ void source_region_convergence_check(struct reb_simulation* const r){
 		if (orb.a*(1-orb.e) > 1.67){
 			fprintf(of, "%e,%u,%e,%e,%e,%e,%e\n", r->t, r->particles[i].hash, orb.a, orb.e, orb.inc, orb.omega, orb.Omega);
 		}
-		
 	}	
 	fclose(of);
 }
+*/
 
 
+/**
+DEPRECATED
 void save_all_orbits(struct reb_simulation* const r){
 
 	char orb_file[255] = "";
@@ -303,6 +358,53 @@ void save_all_orbits(struct reb_simulation* const r){
 	}
 	fclose(of);
 }
+*/
+void save_all_orbits(struct reb_simulation* const r, struct reb_orbit* orbits){
+
+	char orb_file[255] = "";
+	generate_output_filename(orb_file, r, "ORBIT_ALL");
+	FILE* of = fopen(orb_file,"a+");
+
+	// iterate all test particles and massive particles except Sun
+	for (int i=1; i < r->N; i++){
+		struct reb_orbit orb = orbits[i];
+		
+		fprintf(of, "%e,%u,%e,%e,%e,%e,%e\n", r->t, r->particles[i].hash, orb.a, orb.e, orb.inc, orb.omega, orb.Omega);		
+	}
+	fclose(of);
+}
+
+
+/**
+All functions that require orbital elements to be calculated
+*/
+void orbital_check(struct reb_simulation* const r){
+	
+	// calculate orbits of all particles
+	struct reb_orbit* orbits = malloc(r->N * sizeof(struct reb_orbit));
+	
+	#pragma omp parallel for
+	for (int i=1; i < r->N; i++){
+		orbits[i] = reb_tools_particle_to_orbit(r->G, r->particles[i], r->particles[0]);	
+	}
+	
+	// record orbits of all surviving particles
+	save_all_orbits(r, orbits);
+
+	// check if some particles have attained convergence to MB
+	source_region_convergence_check(r, orbits);
+	
+	
+	// remove particles that have gone outside of the plausible orbital space, after initial close encounter
+	if (r->t < -0.5){
+		out_of_bounds_check(r, orbits);
+	}
+	
+	free(orbits);
+}
+		
+
+
 
 
 
@@ -321,18 +423,20 @@ int simulation_health_check(struct reb_simulation* const r){
 }
 
 void heartbeat(struct reb_simulation* r){
-	if (reb_output_check(r, 10.)){
-		reb_output_timing(r, 100);
+	if (reb_output_check(r, 20.)){
+		//reb_output_timing(r, 100);
 		
-		// check if some particles have attained convergence to MB
-		source_region_convergence_check(r);
 		
-		// record orbits of all surviving particles
-		save_all_orbits(r);
+		// orbital check stuff
+		orbital_check(r);
 		
-		char binary_file[255] = "";
-		generate_output_filename(binary_file, r, "BINARY");
-		reb_output_binary(r, binary_file);
+		// only snapshot every 1000 years
+		if (((int) r->t) % 1000 == 0){
+			char binary_file[255] = "";
+			generate_output_filename(binary_file, r, "BINARY");
+			reb_output_binary(r, binary_file);
+			printf("t= %f years. N_active/N = %d/%d. Snapshot: %s\n", r->t, r->N_active, r->N, binary_file);
+		}
 		
 		// kill simulation if all test particles have died
 		simulation_health_check(r);
@@ -343,24 +447,24 @@ void heartbeat(struct reb_simulation* r){
 }
 
 
-void run_sim_from_archive(char *filename, float simulation_time){
-	//char filename[512] = "archive.bin";
-	printf("Attempting to read archive file: %s\n",filename);
+void run_sim_from_archive_start(char *filename, float simulation_time){
+	printf("Initiating pre-set simulation.\nReading archive file: %S\n",filename);
 	struct reb_simulation* r = reb_create_simulation_from_simulationarchive(filename);
 //	struct reb_simulation* r = reb_create_simulation_from_binary(filename);
 	if (r==NULL){
         	printf("No simulation archive found.\n");
-		return;
+		exit(1);
 	}
 
-	printf("Found simulation archive. Loaded snapshot.\n");
+	printf("Found simulation archive. Loaded pre-made simulation set up.\n");
 	
-	// keep as basename
+	// set to give output functions access to basename
 	r->simulationarchive_filename = filename;
 
 	initialise_output_file(r, "COLLISION");
 	initialise_output_file(r, "ORBIT_CONVERGENCE");
 	initialise_output_file(r, "ORBIT_ALL");
+	initialise_output_file(r, "OOB");
 	
 
 
@@ -381,16 +485,11 @@ void run_sim_from_archive(char *filename, float simulation_time){
 	r->simulationarchive_interval = 10e10;
 
 
-
 	print_sim_status(r, simulation_time);
-	
-
 	
 
 	//const double original_dt = r->dt;
 	const double original_dt = -0.01; // TODO FIXME
-	
-	
 	
 	
 	printf("Switching to IAS15 integrator for Earth approach resolution.\n");
@@ -433,6 +532,7 @@ void run_sim_from_archive(char *filename, float simulation_time){
 	r->integrator           = REB_INTEGRATOR_WHFAST;
 	r->dt = original_dt;
 	
+	/*
 	printf("Setting hill sphere collisions.\n");
 	//r->collision            = REB_COLLISION_DIRECT;
 	r->collision            = REB_COLLISION_TREE;
@@ -444,10 +544,8 @@ void run_sim_from_archive(char *filename, float simulation_time){
 		printf("Particle %d has a virtual radius of %.8f km\n", i, r->particles[i].r*AU_KM);
 	}
 	
-
-
-
-
+	*/
+	r->collision            = REB_COLLISION_NONE;
 
 	reb_integrate(r, -simulation_time);
     
@@ -456,12 +554,77 @@ void run_sim_from_archive(char *filename, float simulation_time){
 	reb_free_simulation(r);
 }
 
+
+
+void run_sim_from_archive_snapshot(char *filename, float simulation_time, char *snapshot_fname){
+	printf("Initiating simulation restart.\nReading archive file: %s\n",snapshot_fname);
+	struct reb_simulation* r = reb_create_simulation_from_binary(snapshot_fname);
+	if (r==NULL){
+        	printf("No simulation archive found.\n");
+		exit(1);
+	}
+
+	printf("Found simulation archive. Loaded snapshot at %f years.\n", r->t);
+	
+	/*
+	for (int i=1; i < r->N; i++){
+		struct reb_orbit orb = reb_tools_particle_to_orbit(r->G, r->particles[i], r->particles[0]);
+		printf("%e,%u,%e,%e,%e,%e,%e,%e,%e\n", r->t, r->particles[i].hash, r->particles[i].x, r->particles[i].y, r->particles[i].z, r->particles[i].vx, r->particles[i].vy, r->particles[i].vz);
+		printf("%e,%u,%e,%e,%e,%e,%e\n", r->t, r->particles[i].hash, orb.a, orb.e, orb.inc, orb.omega, orb.Omega);
+	}	
+	*/
+	
+	// keep as basename
+	r->simulationarchive_filename = filename;
+
+	r->heartbeat            = heartbeat;
+	r->simulationarchive_interval = -1.0;
+	r->simulationarchive_interval = 10e10;
+
+
+	print_sim_status(r, simulation_time);
+	
+	
+	printf("Switching to WHFAST integrator for main integration.\n");
+	r->integrator           = REB_INTEGRATOR_WHFAST;
+	
+	/*
+	printf("Setting hill sphere collisions.\n");
+	//r->collision            = REB_COLLISION_DIRECT;
+	r->collision            = REB_COLLISION_TREE;
+	r->collision_resolve    = collision_record_and_destroy;
+	increase_radius_for_close_encounter_record(r);
+	
+	// check virtual radii of massive particles
+	for (int i=0; i < r->N_active; i++){
+		printf("Particle %d has a virtual radius of %.8f km\n", i, r->particles[i].r*AU_KM);
+	}
+	
+	*/
+	r->collision            = REB_COLLISION_NONE;
+
+
+
+	reb_integrate(r, -simulation_time);
+    
+	print_sim_status(r, simulation_time);
+	
+	for (int i=r->N_active; i < r->N; i++){
+		struct reb_orbit orb = reb_tools_particle_to_orbit(r->G, r->particles[i], r->particles[0]);
+		printf("%e,%u,%e,%e,%e,%e,%e\n", r->t, r->particles[i].hash, orb.a, orb.e, orb.inc, orb.omega, orb.Omega);
+	}
+    
+	reb_free_simulation(r);
+}
+
+
 int main(int argc, char* argv[]){
 	// Get the number of processors
 	// int np = omp_get_num_procs();
 
-	if (argc < 2){
-		printf("\n Usage: ./rebound.x ARCHIVEFILE.bin SIMULATION_TIME_EARTH_YEARS\n");
+	if (argc < 3){
+		printf("\n Usage: ./rebound.x ARCHIVEFILE.bin SIMULATION_TIME_EARTH_YEARS [snapshot.bin]\n");
+		exit(1);
 	}
 
 	//int np = atoi(argv[1]);
@@ -473,7 +636,23 @@ int main(int argc, char* argv[]){
 
 	printf("\nomp_get_num_procs() got %d from env var OMP_NUM_THREADS\n", np);
 	
-	run_sim_from_archive(argv[1], atof(argv[2]));
+	printf("Got %d arguments:\n", argc);
+	for (int i = 0; i < argc; i++) {
+		printf("- argument %d: %s\n", i, argv[i]);
+	}
+	
+	if (argc == 3){
+		printf("\n Usage: ./rebound.x ARCHIVEFILE.bin SIMULATION_TIME_EARTH_YEARS\n");
+		run_sim_from_archive_start(argv[1], atof(argv[2]));
+	}
+	else if (argc == 4){
+		run_sim_from_archive_snapshot(argv[1], atof(argv[2]), argv[3]);
+	}
+	else{
+		printf("\nInvalid number of arguments\n");
+		exit(1);
+	}
+	
 
 
 }
